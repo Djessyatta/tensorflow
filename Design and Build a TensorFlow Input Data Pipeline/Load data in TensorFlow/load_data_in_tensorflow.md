@@ -5,6 +5,7 @@ Les types de fichiers traités dans le notebook sont les suivants:
 
 1. Tensor
 2. Fichier CSV
+3. Images
 
 Pour charger un fichier dans TensorFlow, il faut utiliser l'API `tf.data.Dataset`
 
@@ -12,10 +13,15 @@ Pour charger un fichier dans TensorFlow, il faut utiliser l'API `tf.data.Dataset
 
 
 ```python
+import os
+import pathlib
 import numpy as np
 import pandas as pd 
+from PIL import Image
 import tensorflow as tf
 from functools import partial
+import matplotlib.pyplot as plt
+import IPython.display as display
 
 
 print('TensorFlow vertion: ', tf.version.VERSION )
@@ -926,13 +932,283 @@ print(preprocessing_layer(example_batch).numpy()[0])
      -0.2069508 ]
 
 
-# Fin
+# Charger une image dans TensorFlow avec `.tf.Data.Dataset`
 
-L'étape suivante serait d'utiliser `tf.keras.Sequential` avec les données de `preprocessing_layer`.       
-Mais ce n'est pas l'objectif de ce notebook
+
+```python
+# Afficher le nombre d'image dans les répertoires
+path_data = pathlib.Path('./data/img')
+img_count = len(list(path_data.glob('*/*.jpg')))
+
+img_count
+```
+
+
+
+
+    8
+
+
+
+
+```python
+# Créer un tableau
+CLASS_NAMES = np.array([item.name for item in path_data.glob('*') if not item.name.startswith('.')])
+CLASS_NAMES
+```
+
+
+
+
+    array(['chaises', 'pots'], dtype='<U7')
+
+
+
+Afficher les images de la classe `pots`
+
+
+```python
+pots = list(path_data.glob('pots/*'))
+
+for img_path in pots:
+    # Sauter les fichiers cachés
+    if not img_path.name.startswith('.'):
+        display.display(Image.open(str(img_path)))
+```
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_58_0.png)
+
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_58_1.png)
+
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_58_2.png)
+
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_58_3.png)
+
+
+### Charger les images avec `keras.preprocessing`
+
+`keras.preprocessing` permet d'importer facilement une image dans TensorFlow
+
+
+```python
+image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1./255)
+```
+
+Paramètres:
+
+
+```python
+BATCH_SIZE = 2
+IMG_HEIGHT = 224
+IMG_WIDTH = 224
+STEPS_PER_EPOCH = np.ceil(img_count/BATCH_SIZE)
+```
+
+
+```python
+# Charger les images dans TensorFlow
+train_data_gen = image_generator.flow_from_directory(directory=str(path_data),
+                                                     batch_size=BATCH_SIZE,
+                                                     shuffle=True,
+                                                     seed=21,
+                                                     target_size=(IMG_HEIGHT, IMG_WIDTH),
+                                                     classes = list(CLASS_NAMES))
+```
+
+    Found 8 images belonging to 2 classes.
+
+
+
+```python
+# Inspecter un batch
+def show_batch(image_batch, label_batch):
+    plt.figure(figsize=(10,10))
+    for n in range(2):
+        ax = plt.subplot(2,2,n+1) 
+        plt.imshow(image_batch[n]) 
+        plt.title(CLASS_NAMES[label_batch[n]==1][0].title())
+        plt.axis('off')
+```
+
+
+```python
+image_batch, label_batch = next(train_data_gen)
+show_batch(image_batch, label_batch)
+```
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_66_0.png)
+
+
+## Charger avec `tf.data`
+
+La méthode précédente `keras.preprocessing` est simple mais à trois inconvénients:
+
+1. C'est lent au chargement.
+2. Il manque un contrôle fin.
+3. Ce n'est pas bien intégré au reste de TensorFlow..
+
+Pour charger les images avec tf.data.Dataset il faut d'abord créer une liste des chemins des répertoires
+
+
+```python
+# Liste des des chemins de tous les fichiers
+list_files = tf.data.Dataset.list_files('./data/img/*/*.jpg')
+
+# Afficher les chemins des fichiers
+for path_file in list_files:
+    print(path_file.numpy())
+```
+
+    b'./data/img/chaises/aa9ee48fb71de4509e1cee698e714720.jpg'
+    b'./data/img/pots/f80fd578ff6fadb6ffef79487fbbdc28.jpg'
+    b'./data/img/pots/f80fd578ff6fadb6ffef79487fbbdc28-Copy2.jpg'
+    b'./data/img/chaises/87131d092960d4155fb030091ba8d3c9.jpg'
+    b'./data/img/chaises/26ef4540e11275999e106c80e95bde12.jpg'
+    b'./data/img/chaises/14e42660315c88fa7afbb28afd1be0e6.jpg'
+    b'./data/img/pots/f80fd578ff6fadb6ffef79487fbbdc28-Copy1.jpg'
+    b'./data/img/pots/97ef1fb68b4d5c44e99dad6692222572.jpg'
+
+
+Créer une liste contenant les noms des classes
+
+
+```python
+path_data = pathlib.Path('./data/img')
+CLASS_NAMES = np.array([path.name for path in path_data.glob('*') if not path.name.startswith('.')])
+CLASS_NAMES
+```
+
+
+
+
+    array(['chaises', 'pots'], dtype='<U7')
+
+
+
+
+```python
+def get_label(file_path):
+  # Convertire le chemin en plusieurs composents
+  parts = tf.strings.split(file_path, os.path.sep)
+  # Non de la classe qui correspond au nom du répertoire
+  return parts[-2] == CLASS_NAMES 
+
+def decode_img(img):
+  # Convertire le string comprésé dans un format 3D uint8 tensor
+  img = tf.image.decode_jpeg(img, channels=3) 
+  # Utiliser `convert_image_dtype` pour convertire au format floats dans la plage [0,1].
+  img = tf.image.convert_image_dtype(img, tf.float32) 
+  # Redimentioner l'image à la taille voulue.
+  return tf.image.resize(img, [IMG_WIDTH, IMG_HEIGHT])
+
+def process_path(file_path):
+    label = get_label(file_path)
+    # Charger l'image brut en format string
+    img = tf.io.read_file(file_path) 
+    img = decode_img(img)
+    return img, label
+```
+
+
+```python
+# Il contient des sources et des transformations expérimentales de l'ensemble de données qui peuvent être utilisées conjointement avec l'ensemble de données tf.data
+AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+# Définissez `num_parallel_calls` pour que plusieurs images soient chargées/traitées en parallèle.
+labeled_ds = list_ds.map(process_path, num_parallel_calls=AUTOTUNE)
+```
+
+
+```python
+tf.strings.split('./data/img/chaises/aa9ee48fb71de4509e1cee698e714720.jpg', os.path.sep).numpy()
+```
+
+
+
+
+    array([b'.', b'data', b'img', b'chaises',
+           b'aa9ee48fb71de4509e1cee698e714720.jpg'], dtype=object)
+
+
+
+
+```python
+# Afficher la forme des images et le label
+for image, label in labeled_ds.take(1):
+    print("Image shape: ", image.numpy().shape)
+    print("Label: ", label.numpy())
+```
+
+    Image shape:  (224, 224, 3)
+    Label:  [False  True]
+
+
+### Etape suivante:  Basique methode pour l'entrainement
+
+Pour entréner le model avec ces données, il faut:
+
+* Mélanger les données.
+* Créer des mini batch.
+* Les minis batchs doivent être disponible le plus tôt possible.
+
+Utiliser `tf.data` api pour facilement préparer les données avant l'entrenement do model.
+
+
+```python
+def prepare_for_training(ds, cache=True, shuffle_buffer_size=1000):
+    # Le dataset est petit, charger une fois, et garder le en mémoire.
+    # utiliser `.cache(filename)` si le dataset est trop important pour être mise en cache
+    if cache:
+        if isinstance(cache, str):
+            ds = ds.cache(cache)
+        else:
+            ds = ds.cache()
+
+    ds = ds.shuffle(buffer_size=shuffle_buffer_size, seed=21) 
+
+    # Repeat forever
+    ds = ds.repeat()
+
+    ds = ds.batch(BATCH_SIZE)
+
+    # `prefetch` prendre les batchs pendant que le model est entréné
+    ds = ds.prefetch(buffer_size=AUTOTUNE)
+
+    return ds
+```
+
+
+```python
+train_ds = prepare_for_training(labeled_ds)
+
+image_batch, label_batch = next(iter(train_ds))
+```
+
+
+```python
+# Here, we define show_batch() procedure for Inspecting a batch
+show_batch(image_batch.numpy(), label_batch.numpy())
+```
+
+
+![png](load_data_in_tensorflow_files/load_data_in_tensorflow_81_0.png)
+
 
 # Resources 
 1. Charger les données text - lien: https://www.tensorflow.org/tutorials/load_data/text
 2. TF.text - lien:  https://www.tensorflow.org/tutorials/tensorflow_text/intro
 3. Charger des images - https://www.tensorflow.org/tutorials/load_data/images
 4. Lire les données d'un dataframe pandas - https://www.tensorflow.org/tutorials/load_data/pandas_dataframe   
+
+
+```python
+
+```
